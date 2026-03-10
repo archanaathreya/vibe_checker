@@ -1,22 +1,50 @@
-// app/actions.ts
 "use server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-export async function getVibeSpots(city: string, vibe: string) {
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+export async function getVibeSpots(vibe: string, lat?: number, lng?: number) {
+  // Use the 2026 stable workhorse
+  const modelName = "gemini-2.5-flash"; 
+
+  const locationContext = (lat && lng) 
+    ? `I am currently at Latitude: ${lat}, Longitude: ${lng}.` 
+    : "I am in Bengaluru, India."; // Default fallback
 
   const prompt = `
-    I am in ${city}. My current vibe is: ${vibe}.
-    Give me exactly 3 specific places to visit right now.
-    For each place, provide:
-    1. Name
-    2. A 1-sentence description.
-    3. A 'Local Secret' (something not usually in guidebooks).
-    Keep it concise and travel-friendly.
+    ${locationContext}
+    Vibe: "${vibe}".
+    Using Google Maps, find 3 real spots within 3km. 
+    Provide: Name, Address, and why it fits.
   `;
 
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  try {
+    const result = await ai.models.generateContent({
+      model: modelName,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        tools: [{ googleMaps: {} }] 
+      }
+    });
+
+    // --- THE FIX STARTS HERE ---
+    // In the new SDK, we check for 'candidates' first to avoid 'undefined' errors
+    const candidate = result.candidates?.[0];
+    
+    if (!candidate || !candidate.content || !candidate.content.parts) {
+      throw new Error("No response parts found from AI");
+    }
+
+    // Combine all text parts (sometimes AI returns multiple parts)
+    const responseText = candidate.content.parts
+      .map(part => part.text)
+      .filter(text => text !== undefined)
+      .join("\n");
+
+    return responseText || "I found some spots, but couldn't generate a description. Try a different vibe!";
+    
+  } catch (error) {
+    console.error("AI Search Error:", error);
+    return "AI Error: The search failed. Ensure your API Key is valid in Vercel/Env.";
+  }
 }
